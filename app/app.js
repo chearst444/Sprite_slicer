@@ -24,8 +24,12 @@
 
     modeGrid: document.getElementById("modeGrid"),
     modeFixed: document.getElementById("modeFixed"),
+    modeAuto: document.getElementById("modeAuto"),
+    modeJson: document.getElementById("modeJson"),
     gridInputs: document.getElementById("gridInputs"),
     fixedInputs: document.getElementById("fixedInputs"),
+    autoInputs: document.getElementById("autoInputs"),
+    jsonInputs: document.getElementById("jsonInputs"),
     rows: document.getElementById("rows"),
     cols: document.getElementById("cols"),
     spriteW: document.getElementById("spriteW"),
@@ -34,10 +38,23 @@
     offsetY: document.getElementById("offsetY"),
     spacingX: document.getElementById("spacingX"),
     spacingY: document.getElementById("spacingY"),
+    marginHint: document.getElementById("marginHint"),
+
+    detectThreshold: document.getElementById("detectThreshold"),
+    detectGap: document.getElementById("detectGap"),
+    detectMinSize: document.getElementById("detectMinSize"),
+    detectBgColor: document.getElementById("detectBgColor"),
+    detectBtn: document.getElementById("detectBtn"),
+    detectStatus: document.getElementById("detectStatus"),
+
+    jsonFileInput: document.getElementById("jsonFileInput"),
+    jsonLoadBtn: document.getElementById("jsonLoadBtn"),
+    jsonStatus: document.getElementById("jsonStatus"),
 
     prefix: document.getElementById("prefix"),
     namingSeq: document.getElementById("namingSeq"),
     namingCoords: document.getElementById("namingCoords"),
+    namingHint: document.getElementById("namingHint"),
     skipBlank: document.getElementById("skipBlank"),
 
     exportBtn: document.getElementById("exportBtn"),
@@ -49,7 +66,15 @@
     image: null, // HTMLImageElement
     fileBaseName: "sprite",
     sourceCanvas: null, // full-res offscreen canvas holding the decoded image
+    detectedRects: null, // cached results for "auto"/"json" modes: [{r,c,x0,y0,x1,y1,name}]
+    detecting: false,
   };
+
+  function currentMode() {
+    if (els.modeAuto.checked) return "auto";
+    if (els.modeJson.checked) return "json";
+    return els.modeGrid.checked ? "grid" : "fixed";
+  }
 
   // ---- grid math (mirrors the desktop app's logic) ----------------------
   function intOr(value, fallback) {
@@ -57,9 +82,26 @@
     return Number.isFinite(n) ? n : fallback;
   }
 
-  /** Returns { rects, error }. rects: [{r,c,x0,y0,x1,y1}] in image pixels. */
+  /** Returns { rects, error }. rects: [{r,c,x0,y0,x1,y1,name}] in image pixels. */
   function computeRects() {
     if (!state.image) return { rects: [], error: null };
+
+    const mode = currentMode();
+
+    if (mode === "auto") {
+      if (state.detectedRects === null) return { rects: [], error: null };
+      if (!state.detectedRects.length) {
+        return { rects: [], error: 'No sprites detected yet. Click "Detect Sprites".' };
+      }
+      return { rects: state.detectedRects, error: null };
+    }
+    if (mode === "json") {
+      if (state.detectedRects === null) return { rects: [], error: null };
+      if (!state.detectedRects.length) {
+        return { rects: [], error: 'No sprites loaded. Click "Load JSON...".' };
+      }
+      return { rects: state.detectedRects, error: null };
+    }
 
     const imgW = state.image.naturalWidth;
     const imgH = state.image.naturalHeight;
@@ -73,7 +115,6 @@
     }
 
     let rows, cols, cellW, cellH;
-    const mode = els.modeGrid.checked ? "grid" : "fixed";
 
     if (mode === "grid") {
       rows = intOr(els.rows.value, 0);
@@ -116,7 +157,7 @@
         let x1 = Math.min(Math.round(x1f), imgW);
         let y1 = Math.min(Math.round(y1f), imgH);
         if (x1 <= x0 || y1 <= y0) continue;
-        rects.push({ r, c, x0, y0, x1, y1 });
+        rects.push({ r, c, x0, y0, x1, y1, name: null });
       }
     }
     return { rects, error: null };
@@ -151,6 +192,12 @@
       els.prefix.value = els.prefix.value || "sprite";
       setStatus(`Loaded ${file.name}`);
       URL.revokeObjectURL(url);
+
+      // Detected/imported sprite boxes are tied to the previous image.
+      state.detectedRects = null;
+      els.detectStatus.textContent = "Click “Detect Sprites” to scan for content.";
+      els.jsonStatus.textContent = "No JSON file loaded.";
+
       updatePreview();
     };
     img.onerror = () => {
@@ -213,9 +260,13 @@
     if (rects.length) {
       const sw = rects[0].x1 - rects[0].x0;
       const sh = rects[0].y1 - rects[0].y0;
-      els.infoBar.textContent = `${rects.length} sprite(s) — each ~${sw}x${sh}px`;
-    } else {
+      const mode = currentMode();
+      const sizeNote = mode === "grid" || mode === "fixed" ? `each ~${sw}x${sh}px` : "varying sizes";
+      els.infoBar.textContent = `${rects.length} sprite(s) — ${sizeNote}`;
+    } else if (currentMode() !== "auto" && currentMode() !== "json") {
       els.infoBar.textContent = "No sprites in current configuration.";
+    } else {
+      els.infoBar.textContent = "";
     }
   }
 
@@ -239,6 +290,19 @@
   function buildFileName(prefix, idx, totalDigits, r, c, coordsMode) {
     if (coordsMode) return `${prefix}_r${r}_c${c}.png`;
     return `${prefix}_${String(idx).padStart(totalDigits, "0")}.png`;
+  }
+
+  /** name -> unique "name.png", deduped against `used` (a Set). Mirrors the
+   * desktop app: a JSON entry's own name always wins over the naming radio. */
+  function uniqueNamedFile(name, used) {
+    const stem = window.SpriteDetect.sanitizeFilename(name);
+    let fname = `${stem}.png`;
+    let n = 2;
+    while (used.has(fname)) {
+      fname = `${stem}_${n}.png`;
+      n++;
+    }
+    return fname;
   }
 
   // ---- slicing / export --------------------------------------------------
@@ -281,6 +345,7 @@
     const totalDigits = Math.max(3, String(rects.length).length);
 
     const files = [];
+    const usedNames = new Set();
     let idx = 0;
     let skipped = 0;
     for (const rect of rects) {
@@ -290,7 +355,10 @@
         skipped++;
         continue;
       }
-      const name = buildFileName(prefix, idx, totalDigits, rect.r, rect.c, coordsMode);
+      const name = rect.name
+        ? uniqueNamedFile(rect.name, usedNames)
+        : buildFileName(prefix, idx, totalDigits, rect.r, rect.c, coordsMode);
+      usedNames.add(name);
       const data = await canvasToPngBytes(tileCanvas);
       files.push({ name, data });
     }
@@ -390,6 +458,106 @@
     }
   }
 
+  // ---- auto-detect -------------------------------------------------------
+  function parseHexColor(text) {
+    text = text.trim().replace(/^#/, "");
+    if (!text) return null;
+    if (text.length === 3) text = text.split("").map((c) => c + c).join("");
+    if (text.length !== 6 || /[^0-9a-fA-F]/.test(text)) return null;
+    return [0, 2, 4].map((i) => parseInt(text.slice(i, i + 2), 16));
+  }
+
+  function runDetect() {
+    if (!state.image) {
+      setStatus("Please load a sprite sheet first.", true);
+      return;
+    }
+    if (state.detecting) return;
+
+    const threshold = Math.max(0, Math.min(255, intOr(els.detectThreshold.value, 16)));
+    const gapTolerance = Math.max(0, intOr(els.detectGap.value, 2));
+    const minSize = Math.max(1, intOr(els.detectMinSize.value, 4));
+    const bgColor = parseHexColor(els.detectBgColor.value);
+
+    state.detecting = true;
+    els.detectBtn.disabled = true;
+    els.detectStatus.textContent = "Detecting… this can take a few seconds for large images.";
+    setStatus("Detecting sprites...");
+
+    // Defer one tick so the "Detecting…" status actually paints before the
+    // (synchronous, potentially heavy) scan blocks the main thread.
+    setTimeout(() => {
+      try {
+        const w = state.sourceCanvas.width;
+        const h = state.sourceCanvas.height;
+        const imageData = state.sourceCanvas.getContext("2d").getImageData(0, 0, w, h);
+        const rects = window.SpriteDetect.detectSpritesFromImageData(imageData, {
+          threshold, gapTolerance, minSize, bgColor,
+        });
+        state.detectedRects = rects.map((r, i) => ({ r: 0, c: i, x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1, name: null }));
+        if (rects.length) {
+          els.detectStatus.textContent = `${rects.length} sprite(s) detected.`;
+        } else {
+          els.detectStatus.textContent =
+            "No sprite content detected. Try lowering the threshold, increasing gap " +
+            "tolerance, or checking the background color.";
+        }
+        setStatus(`Detected ${rects.length} sprite(s).`);
+      } catch (e) {
+        els.detectStatus.textContent = "⚠ Detection failed: " + (e.message || e);
+        setStatus("Detection failed.", true);
+      } finally {
+        state.detecting = false;
+        els.detectBtn.disabled = false;
+        updatePreview();
+      }
+    }, 20);
+  }
+
+  // ---- JSON coordinate import --------------------------------------------
+  function loadJsonFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let entries;
+      try {
+        const data = JSON.parse(reader.result);
+        entries = window.SpriteDetect.parseJsonSprites(data);
+      } catch (e) {
+        setStatus("Could not load JSON file: " + (e.message || e), true);
+        els.jsonStatus.textContent = "⚠ " + (e.message || e);
+        return;
+      }
+
+      const imgW = state.image ? state.image.naturalWidth : null;
+      const imgH = state.image ? state.image.naturalHeight : null;
+      const rects = [];
+      let skipped = 0;
+      entries.forEach((e, i) => {
+        if (e.w <= 0 || e.h <= 0) {
+          skipped++;
+          return;
+        }
+        const x1 = e.x + e.w;
+        const y1 = e.y + e.h;
+        if (imgW != null && (e.x < 0 || e.y < 0 || x1 > imgW || y1 > imgH)) {
+          skipped++;
+          return;
+        }
+        rects.push({ r: 0, c: i, x0: e.x, y0: e.y, x1, y1, name: e.name });
+      });
+
+      state.detectedRects = rects;
+      els.jsonStatus.textContent =
+        `${file.name} — ${rects.length} sprite(s) loaded` +
+        (skipped ? `, ${skipped} skipped (out of bounds)` : "");
+      setStatus(`Loaded ${rects.length} sprite(s) from ${file.name}`);
+      updatePreview();
+    };
+    reader.onerror = () => setStatus(`Could not read file: ${file.name}`, true);
+    reader.readAsText(file);
+  }
+
   // ---- misc UI wiring ----------------------------------------------------
   function setStatus(msg, isError) {
     els.statusBar.textContent = msg;
@@ -397,9 +565,33 @@
   }
 
   function onModeChange() {
-    const grid = els.modeGrid.checked;
-    els.gridInputs.hidden = !grid;
-    els.fixedInputs.hidden = grid;
+    const mode = currentMode();
+    els.gridInputs.hidden = mode !== "grid";
+    els.fixedInputs.hidden = mode !== "fixed";
+    els.autoInputs.hidden = mode !== "auto";
+    els.jsonInputs.hidden = mode !== "json";
+
+    // Offset & spacing only apply to the two grid-based modes; disable
+    // (rather than hide) so the panel layout never reorders.
+    const gridBased = mode === "grid" || mode === "fixed";
+    [els.offsetX, els.offsetY, els.spacingX, els.spacingY].forEach((el) => {
+      el.disabled = !gridBased;
+    });
+    els.marginHint.textContent = gridBased
+      ? "Start = top-left offset before the first sprite. Spacing = gap between adjacent sprites."
+      : "Not used in this mode — sprite bounds come from the detected content or the imported coordinates instead.";
+
+    // Row/Col naming has no meaning for auto-detected or JSON-imported
+    // sprites -- there's no grid to derive coordinates from.
+    const contentBased = mode === "auto" || mode === "json";
+    els.namingCoords.disabled = contentBased;
+    if (contentBased && els.namingCoords.checked) {
+      els.namingSeq.checked = true;
+    }
+    els.namingHint.textContent = contentBased
+      ? "Detected/imported sprites use sequential naming, unless a JSON entry supplies its own \"name\" (which always takes priority)."
+      : "";
+
     updatePreview();
   }
 
@@ -431,6 +623,8 @@
 
     els.modeGrid.addEventListener("change", onModeChange);
     els.modeFixed.addEventListener("change", onModeChange);
+    els.modeAuto.addEventListener("change", onModeChange);
+    els.modeJson.addEventListener("change", onModeChange);
 
     [
       els.rows, els.cols, els.spriteW, els.spriteH,
@@ -439,6 +633,10 @@
 
     els.namingSeq.addEventListener("change", updatePreview);
     els.namingCoords.addEventListener("change", updatePreview);
+
+    els.detectBtn.addEventListener("click", runDetect);
+    els.jsonLoadBtn.addEventListener("click", () => els.jsonFileInput.click());
+    els.jsonFileInput.addEventListener("change", (e) => loadJsonFile(e.target.files[0]));
 
     els.exportBtn.addEventListener("click", exportZip);
 

@@ -17,6 +17,15 @@
   box-sizing: border-box;
 }
 
+/* The browser's default `[hidden] { display: none }` rule has the same
+   specificity as class selectors like `.input-row { display: grid }` below
+   and loses to them if it merely relies on source order, so pin it with
+   !important -- otherwise toggling `el.hidden = true` on a flex/grid child
+   silently does nothing. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -198,6 +207,17 @@ input[type="number"]:focus,
 input[type="text"]:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
+}
+
+input[type="number"]:disabled,
+input[type="text"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input[type="radio"]:disabled + span,
+label:has(input[type="radio"]:disabled) {
+  opacity: 0.5;
 }
 
 .radio-row,

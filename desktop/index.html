@@ -82,9 +82,12 @@ python sprite_slicer.py</pre>
       <h2>Features</h2>
       <ul>
         <li>Import via file browser or drag-and-drop</li>
-        <li>Rows × Columns or fixed pixel-size slicing, with offset and spacing controls</li>
-        <li>Live grid overlay preview on the sprite sheet</li>
-        <li>Sequential or row/col-based automatic naming with a custom prefix</li>
+        <li>Four slicing methods: Rows × Columns, Fixed Sprite Size, Auto-Detect
+          (content-based bounding boxes for varying/irregular sprite sizes), and
+          JSON coordinate import (custom or TexturePacker-style atlases)</li>
+        <li>Live preview overlay on the sprite sheet</li>
+        <li>Sequential or row/col-based automatic naming with a custom prefix;
+          JSON entries can supply their own name</li>
         <li>Auto-created, collision-safe output folder, with optional .zip export</li>
         <li>Option to skip fully transparent tiles</li>
       </ul>

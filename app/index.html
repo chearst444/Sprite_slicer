@@ -43,10 +43,12 @@
       </div>
 
       <div class="field-group">
-        <h2>2. Grid / Slicing</h2>
-        <div class="radio-row">
+        <h2>2. Slicing Method</h2>
+        <div class="radio-col">
           <label><input type="radio" name="mode" id="modeGrid" checked /> Rows × Columns</label>
           <label><input type="radio" name="mode" id="modeFixed" /> Fixed Sprite Size</label>
+          <label><input type="radio" name="mode" id="modeAuto" /> Auto-Detect (content-based)</label>
+          <label><input type="radio" name="mode" id="modeJson" /> Import Coordinates (JSON)</label>
         </div>
 
         <div id="gridInputs" class="input-row">
@@ -65,6 +67,33 @@
           <label class="input-field">Sprite Height
             <input type="number" id="spriteH" value="32" min="1" inputmode="numeric" />
           </label>
+        </div>
+
+        <div id="autoInputs" hidden>
+          <div class="input-row">
+            <label class="input-field">Threshold
+              <input type="number" id="detectThreshold" value="16" min="0" max="255" inputmode="numeric" />
+            </label>
+            <label class="input-field">Gap Tolerance
+              <input type="number" id="detectGap" value="2" min="0" inputmode="numeric" />
+            </label>
+            <label class="input-field">Min Size (px)
+              <input type="number" id="detectMinSize" value="4" min="1" inputmode="numeric" />
+            </label>
+            <label class="input-field">Bg Color (hex)
+              <input type="text" id="detectBgColor" placeholder="auto" />
+            </label>
+          </div>
+          <p class="hint">Bg Color is only used for images without transparency; leave blank to auto-sample the top-left pixel.</p>
+          <button type="button" class="btn btn-secondary full" id="detectBtn">Detect Sprites</button>
+          <p id="detectStatus" class="hint">Click “Detect Sprites” to scan for content.</p>
+        </div>
+
+        <div id="jsonInputs" hidden>
+          <button type="button" class="btn btn-secondary full" id="jsonLoadBtn">Load JSON...</button>
+          <input type="file" id="jsonFileInput" accept=".json,application/json" hidden />
+          <p id="jsonStatus" class="hint">No JSON file loaded.</p>
+          <p class="hint">Supports a simple {"sprites":[{"name","x","y","width","height"}]} list, or a TexturePacker-style {"frames": ...} atlas. Named entries keep their JSON name as the output filename.</p>
         </div>
       </div>
 
@@ -86,7 +115,7 @@
             <input type="number" id="spacingY" value="0" min="0" inputmode="numeric" />
           </label>
         </div>
-        <p class="hint">Start = top-left offset before the first sprite. Spacing = gap between adjacent sprites.</p>
+        <p id="marginHint" class="hint">Start = top-left offset before the first sprite. Spacing = gap between adjacent sprites.</p>
       </div>
 
       <div class="field-group">
@@ -98,6 +127,7 @@
           <label><input type="radio" name="naming" id="namingSeq" checked /> Sequential (prefix_001.png)</label>
           <label><input type="radio" name="naming" id="namingCoords" /> Row/Col (prefix_r0_c1.png)</label>
         </div>
+        <p id="namingHint" class="hint"></p>
         <label class="checkbox-row">
           <input type="checkbox" id="skipBlank" checked /> Skip fully transparent tiles
         </label>
@@ -115,6 +145,7 @@
   <footer class="status-bar" id="statusBar" role="status" aria-live="polite">Ready — choose a sprite sheet to get started.</footer>
 
   <script src="zip-writer.js"></script>
+  <script src="detect.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Sprite Sheet Splitter</title>
+  <meta name="description" content="Slice a sprite sheet into individual sprite images, entirely in your browser." />
+  <meta name="theme-color" content="#161616" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Sprite Slicer" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23161616'/%3E%3Crect x='14' y='14' width='30' height='30' fill='%2300e5ff'/%3E%3Crect x='56' y='14' width='30' height='30' fill='%23ff6b6b'/%3E%3Crect x='14' y='56' width='30' height='30' fill='%23ffd166'/%3E%3Crect x='56' y='56' width='30' height='30' fill='%2306d6a0'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>Sprite Sheet Splitter</h1>
+    <p class="tagline">Slice a sprite sheet into individual images — right in your browser, on any device.</p>
+  </header>
+
+  <main class="layout">
+    <!-- Preview -->
+    <section class="preview-panel" aria-label="Preview">
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose or drop a sprite sheet image">
+        <canvas id="previewCanvas"></canvas>
+        <div id="placeholder" class="placeholder">
+          <p><strong>Tap to choose</strong> a sprite sheet<br />or drag &amp; drop it here</p>
+        </div>
+      </div>
+      <p id="infoBar" class="info-bar" aria-live="polite"></p>
+      <input type="file" id="fileInput" accept="image/png,image/jpeg,image/gif,image/bmp,image/webp" hidden />
+    </section>
+
+    <!-- Controls -->
+    <section class="controls-panel" aria-label="Settings">
+      <div class="field-group">
+        <h2>1. Sprite Sheet</h2>
+        <button type="button" class="btn btn-secondary full" id="browseBtn">
+          Choose Image...
+        </button>
+        <p id="fileLabel" class="muted">No file loaded</p>
+      </div>
+
+      <div class="field-group">
+        <h2>2. Grid / Slicing</h2>
+        <div class="radio-row">
+          <label><input type="radio" name="mode" id="modeGrid" checked /> Rows × Columns</label>
+          <label><input type="radio" name="mode" id="modeFixed" /> Fixed Sprite Size</label>
+        </div>
+
+        <div id="gridInputs" class="input-row">
+          <label class="input-field">Rows
+            <input type="number" id="rows" value="4" min="1" inputmode="numeric" />
+          </label>
+          <label class="input-field">Columns
+            <input type="number" id="cols" value="4" min="1" inputmode="numeric" />
+          </label>
+        </div>
+
+        <div id="fixedInputs" class="input-row" hidden>
+          <label class="input-field">Sprite Width
+            <input type="number" id="spriteW" value="32" min="1" inputmode="numeric" />
+          </label>
+          <label class="input-field">Sprite Height
+            <input type="number" id="spriteH" value="32" min="1" inputmode="numeric" />
+          </label>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <h2>3. Offset &amp; Spacing</h2>
+        <div class="input-row">
+          <label class="input-field">Start X
+            <input type="number" id="offsetX" value="0" min="0" inputmode="numeric" />
+          </label>
+          <label class="input-field">Start Y
+            <input type="number" id="offsetY" value="0" min="0" inputmode="numeric" />
+          </label>
+        </div>
+        <div class="input-row">
+          <label class="input-field">Spacing X
+            <input type="number" id="spacingX" value="0" min="0" inputmode="numeric" />
+          </label>
+          <label class="input-field">Spacing Y
+            <input type="number" id="spacingY" value="0" min="0" inputmode="numeric" />
+          </label>
+        </div>
+        <p class="hint">Start = top-left offset before the first sprite. Spacing = gap between adjacent sprites.</p>
+      </div>
+
+      <div class="field-group">
+        <h2>4. Naming</h2>
+        <label class="input-field full">Prefix
+          <input type="text" id="prefix" value="sprite" />
+        </label>
+        <div class="radio-col">
+          <label><input type="radio" name="naming" id="namingSeq" checked /> Sequential (prefix_001.png)</label>
+          <label><input type="radio" name="naming" id="namingCoords" /> Row/Col (prefix_r0_c1.png)</label>
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" id="skipBlank" checked /> Skip fully transparent tiles
+        </label>
+      </div>
+
+      <div class="field-group">
+        <h2>5. Export</h2>
+        <button type="button" class="btn btn-primary full" id="exportBtn">Export Sprites (.zip)</button>
+        <button type="button" class="btn btn-secondary full" id="saveFolderBtn" hidden>Save to Folder...</button>
+        <p class="hint">Works fully offline, entirely on this device — nothing is uploaded anywhere.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="status-bar" id="statusBar" role="status" aria-live="polite">Ready — choose a sprite sheet to get started.</footer>
+
+  <script src="zip-writer.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

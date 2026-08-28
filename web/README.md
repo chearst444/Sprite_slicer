@@ -11,14 +11,30 @@ anywhere.
 
 ## Features
 
-Feature parity with the desktop app:
+Feature parity with the desktop app — four slicing methods, for uniform
+grids as well as irregular, varying-size sprite sheets:
 
 - **Import** — tap to choose an image, or drag & drop on desktop.
-- **Rows × Columns** or **Fixed Sprite Size** slicing modes, with
-  configurable start offset (X, Y) and spacing between sprites.
-- **Live grid preview** overlaid on the sheet, recalculated as you type.
+- **Rows × Columns** or **Fixed Sprite Size** — configurable start offset
+  (X, Y) and spacing between sprites.
+- **Auto-Detect** — scans the sheet's actual content (transparency, or a
+  flat background color for images without an alpha channel) and finds
+  each sprite's real bounding box via connected-component analysis
+  (`detect.js`), so sprites of *different* sizes on the same sheet are
+  sliced accurately instead of forcing a uniform grid. Tunable threshold, a
+  gap-tolerance to merge sprites split by a thin gap, and a minimum-size
+  filter to ignore stray noise pixels.
+- **Import Coordinates (JSON)** — load exact sprite bounding boxes from a
+  metadata file instead of computing them: either a simple
+  `{"sprites": [{"name","x","y","width","height"}]}` list, or a
+  TexturePacker-style `{"frames": ...}` atlas (hash or array form). Named
+  entries keep their JSON name as the output filename.
+- **Live preview** overlaid on the sheet, recalculated live for the grid
+  modes and on-demand (via a "Detect Sprites" / "Load JSON..." action) for
+  the content-based modes.
 - **Automatic naming** — sequential (`sprite_001.png`) or grid-coordinate
-  (`sprite_r0_c1.png`), with a custom prefix.
+  (`sprite_r0_c1.png`), with a custom prefix. A JSON entry's own `"name"`
+  always takes priority when present.
 - **Skip fully transparent tiles** option.
 - **One-click export** — bundles every sliced sprite into a `.zip` and
   downloads it (works identically on iOS, Android, and desktop browsers).
@@ -29,10 +45,11 @@ Feature parity with the desktop app:
 
 ## No dependencies, no build step
 
-`zip-writer.js` is a small, self-contained ZIP file writer (~150 lines)
-written specifically for this app — there is no third-party library and no
-network request involved in producing the `.zip`, so the app works fully
-offline once the page itself is loaded (or opened from disk).
+`zip-writer.js` and `detect.js` are small, self-contained modules written
+specifically for this app — there is no third-party library and no network
+request involved in producing the `.zip` or scanning for sprites, so the
+app works fully offline once the page itself is loaded (or opened from
+disk).
 
 ## Running it
 
@@ -62,12 +79,41 @@ to Home Screen" (Safari: Share → Add to Home Screen; Chrome on Android:
 menu → Add to Home screen), which installs it as a standalone app icon
 using `manifest.webmanifest`.
 
+## JSON coordinate format
+
+For *Import Coordinates (JSON)*, either of these shapes works:
+
+```json
+{
+  "sprites": [
+    { "name": "hero_idle_0", "x": 0, "y": 0, "width": 32, "height": 48 },
+    { "name": "hero_idle_1", "x": 32, "y": 0, "width": 32, "height": 48 }
+  ]
+}
+```
+
+or a TexturePacker-style atlas export:
+
+```json
+{
+  "frames": {
+    "hero_idle_0.png": { "frame": { "x": 0, "y": 0, "w": 32, "h": 48 } },
+    "hero_idle_1.png": { "frame": { "x": 32, "y": 0, "w": 32, "h": 48 } }
+  }
+}
+```
+
+`width`/`height` and `w`/`h` are both accepted. Entries without a `name`
+fall back to the prefix + naming pattern set in step 4; entries outside the
+loaded image's bounds are skipped and counted in the status line.
+
 ## Files
 
 ```
 index.html             # markup
 style.css              # responsive, mobile-first styling
-app.js                 # app logic: grid math, canvas preview, slicing, export
+app.js                 # app logic: mode handling, canvas preview, slicing, export
+detect.js               # content-based sprite detection + JSON coordinate parsing
 zip-writer.js           # dependency-free ZIP archive writer
 manifest.webmanifest    # enables "Add to Home Screen" on mobile
 ```

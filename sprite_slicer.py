@@ -12,15 +12,18 @@ See requirements.txt.
 """
 
 import os
+import re
 import sys
+import json
 import shutil
-import tempfile
+import queue
+import threading
 import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageTk, ImageFilter, ImageChops
 except ImportError:
     print("Pillow is required. Install it with:  pip install -r requirements.txt")
     sys.exit(1)
@@ -42,10 +45,240 @@ CANVAS_H = 560
 
 def _int_or(value, default=0):
     try:
-        v = int(float(value))
-        return v
+        return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _float_or(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def sanitize_filename(name):
+    """Turn an arbitrary sprite name (e.g. from a JSON atlas) into a safe
+    filename stem. Atlas names are often "virtual" paths (e.g. a
+    TexturePacker frame named "characters/hero_idle_0.png") rather than
+    real filesystem paths, so path separators are flattened into the name
+    (via underscores) rather than truncated with os.path.basename."""
+    name = str(name).strip()
+    name = re.sub(r"\.(png|jpg|jpeg|gif|bmp|tga|webp)$", "", name, flags=re.IGNORECASE)
+    name = re.sub(r'[\\/:*?"<>|]+', "_", name)
+    name = re.sub(r"\s+", "_", name).strip("._") or "sprite"
+    return name
+
+
+# ----------------------------------------------------------------------
+# Auto-detect: connected-component analysis of the sprite sheet's actual
+# content (transparency, or a flat background color), so sprites of
+# varying, irregular sizes are found from their real bounding boxes
+# instead of assuming a uniform grid.
+# ----------------------------------------------------------------------
+def reading_order_sort(rects):
+    """Sort (x0,y0,x1,y1) rects into a natural top-to-bottom, left-to-right
+    reading order, grouping into rows by approximate vertical position
+    (rects don't need to share an exact y0 to be considered the same row)."""
+    items = sorted(rects, key=lambda r: r[1])
+    rows, current_row, current_y, row_tol = [], [], None, 0
+    for r in items:
+        x0, y0, x1, y1 = r
+        h = y1 - y0
+        if current_y is None:
+            current_row, current_y, row_tol = [r], y0, h * 0.6
+        elif y0 - current_y <= row_tol:
+            current_row.append(r)
+        else:
+            rows.append(current_row)
+            current_row, current_y, row_tol = [r], y0, h * 0.6
+    if current_row:
+        rows.append(current_row)
+    result = []
+    for row in rows:
+        row.sort(key=lambda r: r[0])
+        result.extend(row)
+    return result
+
+
+def detect_sprites(image, threshold=16, gap_tolerance=2, min_size=4, bg_color=None):
+    """Scan `image` for the bounding boxes of its actual sprite content and
+    return them as a reading-order list of (x0, y0, x1, y1) tuples.
+
+    Foreground is determined from the alpha channel when the image has
+    transparency, or by color distance from a background color otherwise.
+    Nearby foreground blobs within `gap_tolerance` pixels are merged into a
+    single sprite (handles sprites split by a thin gap, e.g. separate limbs),
+    and regions smaller than `min_size` on either axis are dropped as noise.
+    """
+    w, h = image.size
+    has_alpha = image.mode in ("RGBA", "LA") or (
+        image.mode == "P" and "transparency" in image.info
+    )
+
+    if has_alpha:
+        rgba = image.convert("RGBA")
+        alpha = rgba.split()[-1]
+        mask_img = alpha.point(lambda a: 255 if a > threshold else 0)
+    else:
+        rgb = image.convert("RGB")
+        if bg_color is None:
+            bg_color = rgb.getpixel((0, 0))
+        bg_img = Image.new("RGB", (w, h), bg_color)
+        diff = ImageChops.difference(rgb, bg_img).convert("L")
+        mask_img = diff.point(lambda p: 255 if p > threshold else 0)
+
+    orig_mask = bytearray(mask_img.tobytes())
+
+    if gap_tolerance > 0:
+        k = 2 * gap_tolerance + 1
+        work_mask = bytearray(mask_img.filter(ImageFilter.MaxFilter(k)).tobytes())
+    else:
+        work_mask = orig_mask
+
+    # Two-pass connected-component labeling (8-connectivity) via union-find,
+    # run on the (possibly dilated) work_mask so nearby blobs merge --
+    # but bounding boxes are gathered from the ORIGINAL mask only, so the
+    # merged box still hugs the real opaque pixels.
+    labels = [0] * (w * h)
+    parent = [0]
+
+    def find(x):
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb if ra < rb else ra] = ra if ra < rb else rb
+
+    next_label = 1
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            idx = row + x
+            if not work_mask[idx]:
+                continue
+            neighbors = []
+            if x > 0 and work_mask[idx - 1]:
+                neighbors.append(labels[idx - 1])
+            if y > 0:
+                if work_mask[idx - w]:
+                    neighbors.append(labels[idx - w])
+                if x > 0 and work_mask[idx - w - 1]:
+                    neighbors.append(labels[idx - w - 1])
+                if x < w - 1 and work_mask[idx - w + 1]:
+                    neighbors.append(labels[idx - w + 1])
+            if not neighbors:
+                labels[idx] = next_label
+                parent.append(next_label)
+                next_label += 1
+            else:
+                m = min(neighbors)
+                labels[idx] = m
+                for n in neighbors:
+                    if n != m:
+                        union(n, m)
+
+    bboxes = {}
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            idx = row + x
+            if not orig_mask[idx]:
+                continue
+            lbl = labels[idx]
+            if lbl == 0:
+                continue
+            r = find(lbl)
+            b = bboxes.get(r)
+            if b is None:
+                bboxes[r] = [x, y, x, y]
+            else:
+                if x < b[0]:
+                    b[0] = x
+                if y < b[1]:
+                    b[1] = y
+                if x > b[2]:
+                    b[2] = x
+                if y > b[3]:
+                    b[3] = y
+
+    rects = []
+    for minx, miny, maxx, maxy in bboxes.values():
+        bw, bh = maxx - minx + 1, maxy - miny + 1
+        if bw < min_size or bh < min_size:
+            continue
+        rects.append((minx, miny, maxx + 1, maxy + 1))
+
+    return reading_order_sort(rects)
+
+
+# ----------------------------------------------------------------------
+# JSON coordinate import: load exact sprite bounding boxes from a metadata
+# file instead of computing them, e.g. a hand-authored map or a
+# TexturePacker-style atlas export.
+# ----------------------------------------------------------------------
+def parse_json_sprites(data):
+    """Normalize a parsed JSON document into a list of
+    {"name": str|None, "x": int, "y": int, "w": int, "h": int} dicts.
+
+    Accepts three shapes:
+      - a bare list of entries: [{"x":..,"y":..,"width":..,"height":..}, ...]
+      - {"sprites": [...]} with the same entry shape
+      - TexturePacker "frames" as a dict: {"frames": {"name.png": {"frame":
+        {"x":..,"y":..,"w":..,"h":..}}, ...}}
+      - TexturePacker "frames" as a list: {"frames": [{"filename":..,
+        "frame": {"x":..,"y":..,"w":..,"h":..}}, ...]}
+    """
+    def entry(name, x, y, w, h):
+        return {
+            "name": str(name) if name is not None else None,
+            "x": _int_or(x), "y": _int_or(y),
+            "w": _int_or(w), "h": _int_or(h),
+        }
+
+    results = []
+
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict) and "sprites" in data and isinstance(data["sprites"], list):
+        items = data["sprites"]
+    elif isinstance(data, dict) and "frames" in data:
+        frames = data["frames"]
+        if isinstance(frames, dict):
+            for name, val in frames.items():
+                frame = val.get("frame", val) if isinstance(val, dict) else {}
+                results.append(entry(
+                    name, frame.get("x"), frame.get("y"),
+                    frame.get("w", frame.get("width")), frame.get("h", frame.get("height")),
+                ))
+            return results
+        elif isinstance(frames, list):
+            items = frames
+        else:
+            raise ValueError("'frames' must be an object or an array")
+    else:
+        raise ValueError(
+            "Unrecognized JSON shape. Expected a list of sprites, "
+            "{\"sprites\": [...]}, or a TexturePacker-style {\"frames\": ...}."
+        )
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        frame = item.get("frame", item)
+        name = item.get("name") or item.get("filename")
+        results.append(entry(
+            name, frame.get("x"), frame.get("y"),
+            frame.get("w", frame.get("width")), frame.get("h", frame.get("height")),
+        ))
+
+    return results
 
 
 class SpriteSlicerApp:
@@ -62,7 +295,7 @@ class SpriteSlicerApp:
         self.offset_canvas = (0, 0)      # top-left of image on canvas
 
         # slicing config vars
-        self.mode = tk.StringVar(value="grid")            # "grid" | "fixed"
+        self.mode = tk.StringVar(value="grid")  # "grid" | "fixed" | "auto" | "json"
         self.rows_var = tk.StringVar(value="4")
         self.cols_var = tk.StringVar(value="4")
         self.sprite_w_var = tk.StringVar(value="32")
@@ -71,6 +304,21 @@ class SpriteSlicerApp:
         self.offset_y_var = tk.StringVar(value="0")
         self.spacing_x_var = tk.StringVar(value="0")
         self.spacing_y_var = tk.StringVar(value="0")
+
+        # auto-detect params
+        self.detect_threshold_var = tk.StringVar(value="16")
+        self.detect_gap_var = tk.StringVar(value="2")
+        self.detect_minsize_var = tk.StringVar(value="4")
+        self.detect_bgcolor_var = tk.StringVar(value="")
+        self.detect_status_var = tk.StringVar(value="Click “Detect Sprites” to scan for content.")
+        self._detecting = False
+
+        # json import
+        self.json_path_var = tk.StringVar(value="No JSON file loaded")
+        self._json_error = None
+
+        # cached results for auto/json modes (list of (r,c,x0,y0,x1,y1,name))
+        self.detected_rects = None
 
         self.prefix_var = tk.StringVar(value="sprite")
         self.naming_var = tk.StringVar(value="sequential")  # "sequential" | "coords"
@@ -93,7 +341,7 @@ class SpriteSlicerApp:
         root.columnconfigure(1, weight=1)
         root.rowconfigure(0, weight=1)
 
-        # -------- left: controls panel (scrollable) --------
+        # -------- left: controls panel --------
         controls_outer = ttk.Frame(root, padding=(10, 10))
         controls_outer.grid(row=0, column=0, sticky="ns")
 
@@ -117,15 +365,23 @@ class SpriteSlicerApp:
         self.file_label.pack(anchor="w", pady=(6, 0))
 
         # --- slicing mode ---
-        mode_frame = ttk.LabelFrame(controls_outer, text="2. Grid / Slicing", padding=10)
+        mode_frame = ttk.LabelFrame(controls_outer, text="2. Slicing Method", padding=10)
         mode_frame.pack(fill="x", pady=(0, 10))
 
-        mode_row = ttk.Frame(mode_frame)
-        mode_row.pack(fill="x")
-        ttk.Radiobutton(mode_row, text="Rows x Columns", variable=self.mode,
+        mode_row1 = ttk.Frame(mode_frame)
+        mode_row1.pack(fill="x", anchor="w")
+        ttk.Radiobutton(mode_row1, text="Rows x Columns", variable=self.mode,
                          value="grid", command=self._on_mode_change).pack(side="left")
-        ttk.Radiobutton(mode_row, text="Fixed Sprite Size (px)", variable=self.mode,
+        ttk.Radiobutton(mode_row1, text="Fixed Sprite Size", variable=self.mode,
                          value="fixed", command=self._on_mode_change).pack(side="left", padx=(12, 0))
+        mode_row2 = ttk.Frame(mode_frame)
+        mode_row2.pack(fill="x", anchor="w", pady=(4, 0))
+        ttk.Radiobutton(mode_row2, text="Auto-Detect (content-based)", variable=self.mode,
+                         value="auto", command=self._on_mode_change).pack(side="left")
+        mode_row3 = ttk.Frame(mode_frame)
+        mode_row3.pack(fill="x", anchor="w", pady=(4, 0))
+        ttk.Radiobutton(mode_row3, text="Import Coordinates (JSON)", variable=self.mode,
+                         value="json", command=self._on_mode_change).pack(side="left")
 
         # grid inputs
         self.grid_inputs = ttk.Frame(mode_frame)
@@ -138,19 +394,54 @@ class SpriteSlicerApp:
         self._labeled_entry(self.fixed_inputs, "Sprite Width:", self.sprite_w_var, 0, 0)
         self._labeled_entry(self.fixed_inputs, "Sprite Height:", self.sprite_h_var, 0, 2)
 
-        # --- margins / spacing / offset ---
-        margin_frame = ttk.LabelFrame(controls_outer, text="3. Offset & Spacing", padding=10)
-        margin_frame.pack(fill="x", pady=(0, 10))
-        self._labeled_entry(margin_frame, "Start X:", self.offset_x_var, 0, 0)
-        self._labeled_entry(margin_frame, "Start Y:", self.offset_y_var, 0, 2)
-        self._labeled_entry(margin_frame, "Spacing X:", self.spacing_x_var, 1, 0, pady=(6, 0))
-        self._labeled_entry(margin_frame, "Spacing Y:", self.spacing_y_var, 1, 2, pady=(6, 0))
+        # auto-detect inputs
+        self.auto_inputs = ttk.Frame(mode_frame)
+        self._labeled_entry(self.auto_inputs, "Threshold:", self.detect_threshold_var, 0, 0)
+        self._labeled_entry(self.auto_inputs, "Gap Tolerance:", self.detect_gap_var, 0, 2)
+        self._labeled_entry(self.auto_inputs, "Min Size (px):", self.detect_minsize_var, 1, 0, pady=(6, 0))
+        self._labeled_entry(self.auto_inputs, "Bg Color (hex):", self.detect_bgcolor_var, 1, 2, pady=(6, 0), entry_width=8)
         ttk.Label(
-            margin_frame,
+            self.auto_inputs,
+            text="Bg Color is only used for images without transparency;\n"
+                 "leave blank to auto-sample from the top-left pixel.",
+            foreground="#666", justify="left", wraplength=280,
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.detect_button = ttk.Button(self.auto_inputs, text="Detect Sprites", command=self.run_detect)
+        self.detect_button.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        ttk.Label(self.auto_inputs, textvariable=self.detect_status_var, foreground="#666",
+                  wraplength=280, justify="left").grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        # json import inputs
+        self.json_inputs = ttk.Frame(mode_frame)
+        ttk.Button(self.json_inputs, text="Load JSON...", command=self.browse_json).pack(fill="x")
+        ttk.Label(self.json_inputs, textvariable=self.json_path_var, foreground="#666",
+                  wraplength=280, justify="left").pack(anchor="w", pady=(6, 0))
+        ttk.Label(
+            self.json_inputs,
+            text="Supports a simple {\"sprites\":[{\"name\",\"x\",\"y\",\"width\",\"height\"}]} "
+                 "list, or a TexturePacker-style {\"frames\": ...} atlas. Named entries keep "
+                 "their JSON name as the output filename.",
+            foreground="#666", justify="left", wraplength=280,
+        ).pack(anchor="w", pady=(6, 0))
+
+        # --- margins / spacing / offset (grid & fixed modes only; the
+        # section stays in place and its inputs are disabled rather than
+        # hidden for auto/json modes, so toggling modes never reorders it) ---
+        self.margin_frame = ttk.LabelFrame(controls_outer, text="3. Offset & Spacing", padding=10)
+        self.margin_frame.pack(fill="x", pady=(0, 10))
+        self.margin_entries = [
+            self._labeled_entry(self.margin_frame, "Start X:", self.offset_x_var, 0, 0),
+            self._labeled_entry(self.margin_frame, "Start Y:", self.offset_y_var, 0, 2),
+            self._labeled_entry(self.margin_frame, "Spacing X:", self.spacing_x_var, 1, 0, pady=(6, 0)),
+            self._labeled_entry(self.margin_frame, "Spacing Y:", self.spacing_y_var, 1, 2, pady=(6, 0)),
+        ]
+        self.margin_hint = ttk.Label(
+            self.margin_frame,
             text="Start = top-left offset before the first sprite.\n"
                  "Spacing = gap between adjacent sprites.",
             foreground="#666", justify="left"
-        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        )
+        self.margin_hint.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         # --- naming ---
         naming_frame = ttk.LabelFrame(controls_outer, text="4. Naming", padding=10)
@@ -160,11 +451,16 @@ class SpriteSlicerApp:
         naming_row.grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 0))
         ttk.Radiobutton(naming_row, text="Sequential (prefix_001.png)", variable=self.naming_var,
                          value="sequential", command=self._update_preview).pack(anchor="w")
-        ttk.Radiobutton(naming_row, text="Row/Col (prefix_r0_c1.png)", variable=self.naming_var,
-                         value="coords", command=self._update_preview).pack(anchor="w")
+        self.coords_naming_radio = ttk.Radiobutton(
+            naming_row, text="Row/Col (prefix_r0_c1.png)", variable=self.naming_var,
+            value="coords", command=self._update_preview)
+        self.coords_naming_radio.pack(anchor="w")
+        self.naming_hint = ttk.Label(
+            naming_frame, foreground="#666", justify="left", wraplength=280)
+        self.naming_hint.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         ttk.Checkbutton(naming_frame, text="Skip fully transparent/blank tiles",
                          variable=self.skip_blank_var, command=self._update_preview).grid(
-            row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+            row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         # --- output ---
         output_frame = ttk.LabelFrame(controls_outer, text="5. Export", padding=10)
@@ -236,12 +532,46 @@ class SpriteSlicerApp:
             v.trace_add("write", lambda *a: self._update_preview())
 
     def _on_mode_change(self):
-        if self.mode.get() == "grid":
-            self.fixed_inputs.pack_forget()
+        mode = self.mode.get()
+        self.grid_inputs.pack_forget()
+        self.fixed_inputs.pack_forget()
+        self.auto_inputs.pack_forget()
+        self.json_inputs.pack_forget()
+
+        if mode == "grid":
             self.grid_inputs.pack(fill="x", pady=(8, 0))
-        else:
-            self.grid_inputs.pack_forget()
+        elif mode == "fixed":
             self.fixed_inputs.pack(fill="x", pady=(8, 0))
+        elif mode == "auto":
+            self.auto_inputs.pack(fill="x", pady=(8, 0))
+        else:  # json
+            self.json_inputs.pack(fill="x", pady=(8, 0))
+
+        # Offset & spacing only make sense for the two grid-based modes;
+        # disable (rather than hide) so the panel layout never reorders.
+        grid_based = mode in ("grid", "fixed")
+        for entry in self.margin_entries:
+            entry.configure(state="normal" if grid_based else "disabled")
+        self.margin_hint.configure(
+            text=("Start = top-left offset before the first sprite.\n"
+                  "Spacing = gap between adjacent sprites.") if grid_based
+            else "Not used in this mode — sprite bounds come from the "
+                 "detected content or the imported coordinates instead."
+        )
+
+        # Row/Col naming has no meaning for auto-detected or JSON-imported
+        # sprites -- there's no grid to derive coordinates from.
+        if mode in ("auto", "json"):
+            self.coords_naming_radio.configure(state="disabled")
+            if self.naming_var.get() == "coords":
+                self.naming_var.set("sequential")
+            hint = ("Detected/imported sprites use sequential naming, unless a JSON "
+                    "entry supplies its own \"name\" (which always takes priority).")
+        else:
+            self.coords_naming_radio.configure(state="normal")
+            hint = ""
+        self.naming_hint.configure(text=hint)
+
         self._update_preview()
 
     # ------------------------------------------------------------------
@@ -283,16 +613,160 @@ class SpriteSlicerApp:
         self.reset_output_dir()
         self.status_var.set(f"Loaded {os.path.basename(path)}")
         self.canvas.delete("placeholder")
+
+        # Detected/imported sprite boxes are tied to the previous image.
+        self.detected_rects = None
+        self._json_error = None
+        self.detect_status_var.set("Click “Detect Sprites” to scan for content.")
+        self.json_path_var.set("No JSON file loaded")
+
+        self._update_preview()
+
+    # ------------------------------------------------------------------
+    # Auto-detect
+    # ------------------------------------------------------------------
+    def _parse_hex_color(self, text):
+        text = text.strip().lstrip("#")
+        if not text:
+            return None
+        try:
+            if len(text) == 3:
+                text = "".join(c * 2 for c in text)
+            if len(text) != 6:
+                return None
+            return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            return None
+
+    def run_detect(self):
+        if self.image is None:
+            messagebox.showwarning(APP_TITLE, "Please load a sprite sheet first.")
+            return
+        if self._detecting:
+            return
+
+        threshold = max(0, min(255, _int_or(self.detect_threshold_var.get(), 16)))
+        gap = max(0, _int_or(self.detect_gap_var.get(), 2))
+        min_size = max(1, _int_or(self.detect_minsize_var.get(), 4))
+        bg_color = self._parse_hex_color(self.detect_bgcolor_var.get())
+
+        self._detecting = True
+        self.detect_button.configure(state="disabled")
+        self.detect_status_var.set("Detecting… this can take a few seconds for large images.")
+        self.status_var.set("Detecting sprites...")
+
+        image = self.image
+        result_queue = queue.Queue()
+
+        def worker():
+            try:
+                rects = detect_sprites(
+                    image, threshold=threshold, gap_tolerance=gap,
+                    min_size=min_size, bg_color=bg_color,
+                )
+                result_queue.put(("ok", rects))
+            except Exception as e:  # pragma: no cover - defensive
+                result_queue.put(("error", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.root.after(80, lambda: self._poll_detect(result_queue))
+
+    def _poll_detect(self, result_queue):
+        try:
+            status, payload = result_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(80, lambda: self._poll_detect(result_queue))
+            return
+
+        self._detecting = False
+        self.detect_button.configure(state="normal")
+
+        if status == "error":
+            self.detect_status_var.set(f"⚠ Detection failed: {payload}")
+            self.status_var.set("Detection failed.")
+            return
+
+        rects = payload
+        self.detected_rects = [
+            (0, i, x0, y0, x1, y1, None) for i, (x0, y0, x1, y1) in enumerate(rects)
+        ]
+        if rects:
+            self.detect_status_var.set(f"{len(rects)} sprite(s) detected.")
+        else:
+            self.detect_status_var.set(
+                "No sprite content detected. Try lowering the threshold, "
+                "increasing gap tolerance, or checking the background color."
+            )
+        self.status_var.set(f"Detected {len(rects)} sprite(s).")
+        self._update_preview()
+
+    # ------------------------------------------------------------------
+    # JSON import
+    # ------------------------------------------------------------------
+    def browse_json(self):
+        path = filedialog.askopenfilename(
+            title="Select a sprite coordinate JSON file",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if path:
+            self.load_json(path)
+
+    def load_json(self, path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = parse_json_sprites(data)
+        except Exception as e:
+            messagebox.showerror(APP_TITLE, f"Could not load JSON file:\n{e}")
+            return
+
+        img_w, img_h = (self.image.size if self.image else (None, None))
+        rects, skipped = [], 0
+        for i, e in enumerate(entries):
+            x0, y0, w, h = e["x"], e["y"], e["w"], e["h"]
+            if w <= 0 or h <= 0:
+                skipped += 1
+                continue
+            x1, y1 = x0 + w, y0 + h
+            if img_w is not None:
+                if x0 < 0 or y0 < 0 or x1 > img_w or y1 > img_h:
+                    skipped += 1
+                    continue
+            rects.append((0, i, x0, y0, x1, y1, e["name"]))
+
+        self.detected_rects = rects
+        self.json_path_var.set(
+            f"{os.path.basename(path)} — {len(rects)} sprite(s) loaded"
+            + (f", {skipped} skipped (out of bounds)" if skipped else "")
+        )
+        self.status_var.set(f"Loaded {len(rects)} sprite(s) from {os.path.basename(path)}")
         self._update_preview()
 
     # ------------------------------------------------------------------
     # Grid computation
     # ------------------------------------------------------------------
     def compute_rects(self):
-        """Return (rects, error) where rects is a list of
-        (row, col, x0, y0, x1, y1) in ORIGINAL image pixel coordinates."""
+        """Return (rects, error). rects is a list of
+        (row, col, x0, y0, x1, y1, name) in ORIGINAL image pixel
+        coordinates; name is None unless a JSON entry supplied one."""
         if self.image is None:
             return [], None
+
+        mode = self.mode.get()
+
+        if mode == "auto":
+            if self.detected_rects is None:
+                return [], None
+            if not self.detected_rects:
+                return [], "No sprites detected yet. Click “Detect Sprites”."
+            return self.detected_rects, None
+
+        if mode == "json":
+            if self.detected_rects is None:
+                return [], None
+            if not self.detected_rects:
+                return [], "No sprites loaded. Click “Load JSON...”."
+            return self.detected_rects, None
 
         img_w, img_h = self.image.size
         offset_x = _int_or(self.offset_x_var.get(), 0)
@@ -303,7 +777,7 @@ class SpriteSlicerApp:
         if offset_x < 0 or offset_y < 0 or spacing_x < 0 or spacing_y < 0:
             return [], "Offset and spacing must be zero or positive."
 
-        if self.mode.get() == "grid":
+        if mode == "grid":
             rows = _int_or(self.rows_var.get(), 0)
             cols = _int_or(self.cols_var.get(), 0)
             if rows <= 0 or cols <= 0:
@@ -316,7 +790,7 @@ class SpriteSlicerApp:
             cell_h = avail_h / rows
             if cell_w < 1 or cell_h < 1:
                 return [], "Computed sprite size is smaller than 1px. Reduce rows/columns."
-        else:
+        else:  # fixed
             cell_w = _int_or(self.sprite_w_var.get(), 0)
             cell_h = _int_or(self.sprite_h_var.get(), 0)
             if cell_w <= 0 or cell_h <= 0:
@@ -338,7 +812,7 @@ class SpriteSlicerApp:
                 ry1 = min(ry1, img_h)
                 if rx1 <= rx0 or ry1 <= ry0:
                     continue
-                rects.append((r, c, rx0, ry0, rx1, ry1))
+                rects.append((r, c, rx0, ry0, rx1, ry1, None))
         return rects, None
 
     # ------------------------------------------------------------------
@@ -378,7 +852,7 @@ class SpriteSlicerApp:
             canvas.create_text(cw // 2, ch - 16, text=error, fill="#ff6b6b", tags="error")
             return
 
-        for (r, c, x0, y0, x1, y1) in rects:
+        for (r, c, x0, y0, x1, y1, name) in rects:
             cx0, cy0 = off_x + x0 * scale, off_y + y0 * scale
             cx1, cy1 = off_x + x1 * scale, off_y + y1 * scale
             canvas.create_rectangle(cx0, cy0, cx1, cy1, outline="#00e5ff", width=1, tags="grid")
@@ -386,11 +860,13 @@ class SpriteSlicerApp:
         if rects:
             sample_w = rects[0][4] - rects[0][2]
             sample_h = rects[0][5] - rects[0][3]
-            self.info_var.set(
-                f"{len(rects)} sprite(s) — each ~{sample_w}x{sample_h}px"
-            )
-        else:
+            uniform = self.mode.get() in ("grid", "fixed")
+            size_note = f"each ~{sample_w}x{sample_h}px" if uniform else "varying sizes"
+            self.info_var.set(f"{len(rects)} sprite(s) — {size_note}")
+        elif self.mode.get() not in ("auto", "json"):
             self.info_var.set("No sprites in current configuration.")
+        else:
+            self.info_var.set("")
 
     # ------------------------------------------------------------------
     # Output directory handling
@@ -449,10 +925,11 @@ class SpriteSlicerApp:
 
         source = self.image
         total_digits = max(3, len(str(len(rects))))
+        used_names = set()
 
         exported = 0
         skipped = 0
-        for idx, (r, c, x0, y0, x1, y1) in enumerate(rects, start=1):
+        for idx, (r, c, x0, y0, x1, y1, name) in enumerate(rects, start=1):
             tile = source.crop((x0, y0, x1, y1))
 
             if skip_blank and tile.mode in ("RGBA", "LA"):
@@ -461,10 +938,18 @@ class SpriteSlicerApp:
                     skipped += 1
                     continue
 
-            if naming == "coords":
+            if name:
+                stem = sanitize_filename(name)
+                fname = f"{stem}.png"
+                dedupe = 2
+                while fname in used_names:
+                    fname = f"{stem}_{dedupe}.png"
+                    dedupe += 1
+            elif naming == "coords":
                 fname = f"{prefix}_r{r}_c{c}.png"
             else:
                 fname = f"{prefix}_{idx:0{total_digits}d}.png"
+            used_names.add(fname)
 
             tile.save(os.path.join(out_dir, fname))
             exported += 1

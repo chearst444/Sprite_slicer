@@ -8,17 +8,31 @@ browser, no server, no build step.
 
 - **Import**: Open a sprite sheet via file browser, or drag & drop it
   straight onto the preview (PNG, JPG, BMP, GIF, TGA, WEBP).
-- **Slicing configuration**:
-  - *Rows x Columns* mode — specify a grid and cell size is derived
-    automatically.
-  - *Fixed Sprite Size* mode — specify exact pixel width/height per sprite
-    and the number of rows/columns is auto-detected from the sheet size.
-  - Start offset (X, Y) and spacing between sprites, for sheets with
-    padding/margins/gutters.
-- **Live grid preview** — an overlay is drawn directly on the sprite sheet
-  so you can verify slice boundaries before exporting anything.
+- **Slicing configuration** — four methods, for uniform grids as well as
+  irregular, varying-size sprite sheets:
+  - *Rows x Columns* — specify a grid and cell size is derived automatically.
+  - *Fixed Sprite Size* — specify exact pixel width/height per sprite, and
+    the number of rows/columns is derived from the sheet size.
+  - *Auto-Detect* — scans the sheet's actual content (transparency, or a
+    flat background color for images without an alpha channel) and finds
+    each sprite's real bounding box via connected-component analysis, so
+    sprites of *different* sizes on the same sheet are sliced accurately
+    instead of forcing a uniform grid. Tunable threshold, a gap-tolerance
+    to merge sprites split by a thin gap (e.g. separated limbs), and a
+    minimum-size filter to ignore stray noise pixels.
+  - *Import Coordinates (JSON)* — load exact sprite bounding boxes from a
+    metadata file instead of computing them: either a simple
+    `{"sprites": [{"name","x","y","width","height"}]}` list, or a
+    TexturePacker-style `{"frames": ...}` atlas (hash or array form).
+    Named entries keep their JSON name as the output filename.
+  - Start offset (X, Y) and spacing between sprites (grid modes only), for
+    sheets with padding/margins/gutters.
+- **Live preview** — an overlay is drawn directly on the sprite sheet so you
+  can verify slice boundaries before exporting anything, whether from a
+  uniform grid, detected content, or an imported mapping.
 - **Automatic naming** — sequential (`sprite_001.png`, `sprite_002.png`, ...)
-  or grid-coordinate based (`sprite_r0_c1.png`), with a custom prefix.
+  or grid-coordinate based (`sprite_r0_c1.png`), with a custom prefix. A
+  JSON entry's own `"name"` always takes priority when present.
 - **Skip blank tiles** — optionally skip fully transparent cells (useful for
   sheets that don't perfectly fill their grid).
 - **Directory management** — a dedicated output folder (`<sheet_name>_sliced`,
@@ -49,15 +63,50 @@ python sprite_slicer.py
 
 1. **Load a sheet** — click "Browse for Image..." or drag an image onto the
    preview panel.
-2. **Configure slicing** — choose Rows x Columns or Fixed Sprite Size, and
-   set start offset / spacing if your sheet has padding or gutters between
-   sprites.
-3. **Check the preview** — cyan grid lines overlay the sheet live as you
-   type, so you can confirm the slices line up before exporting.
+2. **Choose a slicing method**:
+   - *Rows x Columns* / *Fixed Sprite Size* — set start offset / spacing if
+     your sheet has padding or gutters between sprites; the preview updates
+     live as you type.
+   - *Auto-Detect* — adjust threshold / gap tolerance / min size if needed,
+     then click **Detect Sprites** (this scans the image, so it runs on
+     demand rather than on every keystroke).
+   - *Import Coordinates (JSON)* — click **Load JSON...** and pick a
+     metadata file (see below for the supported formats).
+3. **Check the preview** — cyan boxes overlay the sheet so you can confirm
+   the slices are correct before exporting, whether uniform, detected, or
+   imported.
 4. **Set naming** — pick a prefix and naming pattern.
 5. **Export** — optionally pick an output folder and/or enable "Also create
    a .zip archive", then click **Export Sprites**. You'll be asked if you'd
    like the output folder opened for you.
+
+## JSON coordinate format
+
+For *Import Coordinates (JSON)*, either of these shapes works:
+
+```json
+{
+  "sprites": [
+    { "name": "hero_idle_0", "x": 0, "y": 0, "width": 32, "height": 48 },
+    { "name": "hero_idle_1", "x": 32, "y": 0, "width": 32, "height": 48 }
+  ]
+}
+```
+
+or a TexturePacker-style atlas export:
+
+```json
+{
+  "frames": {
+    "hero_idle_0.png": { "frame": { "x": 0, "y": 0, "w": 32, "h": 48 } },
+    "hero_idle_1.png": { "frame": { "x": 32, "y": 0, "w": 32, "h": 48 } }
+  }
+}
+```
+
+`width`/`height` and `w`/`h` are both accepted. Entries without a `name`
+fall back to the prefix + naming pattern set in step 4; entries that fall
+outside the loaded image's bounds are skipped and counted in the status line.
 
 ## Packaging as a standalone executable (optional)
 

@@ -42,6 +42,12 @@ SUPPORTED_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tga", ".webp")
 CANVAS_W = 760
 CANVAS_H = 560
 
+# Window width, in px, below which the controls panel stacks above the
+# preview instead of sitting beside it -- this is what keeps the app usable
+# on a phone/tablet-sized window (or a narrow desktop one) instead of
+# cramming everything into a sliver next to the sheet preview.
+BREAKPOINT_WIDTH = 820
+
 
 def _int_or(value, default=0):
     try:
@@ -285,7 +291,9 @@ class SpriteSlicerApp:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.minsize(1080, 700)
+        # Small enough to fit a phone- or tablet-sized window (or a resized
+        # desktop one); the responsive layout below takes over from there.
+        self.root.minsize(340, 480)
 
         # ---- state -------------------------------------------------
         self.image_path = None          # path to source sprite sheet
@@ -329,21 +337,90 @@ class SpriteSlicerApp:
         self.status_var = tk.StringVar(value="Open a sprite sheet to get started.")
         self.info_var = tk.StringVar(value="")
 
+        # nudge / touch-drag support for repositioning the grid on the
+        # preview directly, instead of typing into the offset fields
+        self.nudge_step_var = tk.StringVar(value="1")
+        self._layout_mode = None   # "wide" | "narrow", tracks which responsive layout is active
+        self._drag_start = None    # (canvas_x, canvas_y, start_offset_x, start_offset_y) while dragging
+        self._wrap_labels = []     # labels whose wraplength should track the controls panel width
+
         self._build_ui()
         self._bind_traces()
+        self._apply_responsive_layout()
 
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
     def _build_ui(self):
         root = self.root
-        root.columnconfigure(0, weight=0)
-        root.columnconfigure(1, weight=1)
+        root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
+        root.rowconfigure(1, weight=0)
 
-        # -------- left: controls panel --------
-        controls_outer = ttk.Frame(root, padding=(10, 10))
-        controls_outer.grid(row=0, column=0, sticky="ns")
+        # Touch-friendlier default hit targets -- bigger tap area on every
+        # button/checkbox/radio button helps a lot on a phone/tablet screen.
+        style = ttk.Style(root)
+        style.configure("TButton", padding=(10, 8))
+        style.configure("TCheckbutton", padding=(2, 6))
+        style.configure("TRadiobutton", padding=(2, 6))
+
+        # `body` holds the controls panel and the preview panel, and is the
+        # thing whose internal grid gets reconfigured by
+        # _apply_responsive_layout() -- side-by-side on a wide window,
+        # stacked (controls on top, preview below) on a narrow/phone one.
+        self.body = ttk.Frame(root)
+        self.body.grid(row=0, column=0, sticky="nsew")
+
+        status_bar = ttk.Frame(root, relief="sunken", borderwidth=1)
+        status_bar.grid(row=1, column=0, sticky="ew")
+        ttk.Label(status_bar, textvariable=self.status_var, padding=(6, 3)).pack(anchor="w")
+
+        # -------- left: controls panel (scrollable, so a short/narrow
+        # window scrolls instead of clipping controls off-screen) --------
+        self.controls_container = ttk.Frame(self.body)
+
+        self.controls_canvas = tk.Canvas(self.controls_container, highlightthickness=0,
+                                          bd=0, width=300, height=400)
+        controls_scroll = ttk.Scrollbar(self.controls_container, orient="vertical",
+                                         command=self.controls_canvas.yview)
+        self.controls_canvas.configure(yscrollcommand=controls_scroll.set)
+        self.controls_canvas.pack(side="left", fill="both", expand=True)
+        controls_scroll.pack(side="right", fill="y")
+
+        controls_outer = ttk.Frame(self.controls_canvas, padding=(10, 10))
+        self._controls_window = self.controls_canvas.create_window(
+            (0, 0), window=controls_outer, anchor="nw"
+        )
+
+        def _on_controls_inner_configure(event):
+            self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all"))
+        controls_outer.bind("<Configure>", _on_controls_inner_configure)
+
+        def _on_controls_canvas_configure(event):
+            self.controls_canvas.itemconfig(self._controls_window, width=event.width)
+            wrap = max(160, event.width - 24)
+            for label in self._wrap_labels:
+                label.configure(wraplength=wrap)
+        self.controls_canvas.bind("<Configure>", _on_controls_canvas_configure)
+
+        def _on_mousewheel(event):
+            if event.num == 5 or event.delta < 0:
+                self.controls_canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:
+                self.controls_canvas.yview_scroll(-1, "units")
+
+        def _bind_mousewheel(_event=None):
+            self.controls_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            self.controls_canvas.bind_all("<Button-4>", _on_mousewheel)
+            self.controls_canvas.bind_all("<Button-5>", _on_mousewheel)
+
+        def _unbind_mousewheel(_event=None):
+            self.controls_canvas.unbind_all("<MouseWheel>")
+            self.controls_canvas.unbind_all("<Button-4>")
+            self.controls_canvas.unbind_all("<Button-5>")
+
+        self.controls_canvas.bind("<Enter>", _bind_mousewheel)
+        self.controls_canvas.bind("<Leave>", _unbind_mousewheel)
 
         ttk.Label(controls_outer, text=APP_TITLE, font=("TkDefaultFont", 14, "bold")).pack(
             anchor="w", pady=(0, 10)
@@ -357,12 +434,12 @@ class SpriteSlicerApp:
         )
         drop_hint = "Drag & drop an image onto the preview" if DND_AVAILABLE else \
             "(Install tkinterdnd2 to enable drag & drop)"
-        ttk.Label(import_frame, text=drop_hint, foreground="#666", wraplength=280).pack(
-            anchor="w", pady=(6, 0)
-        )
+        drop_hint_label = ttk.Label(import_frame, text=drop_hint, foreground="#666", wraplength=280)
+        drop_hint_label.pack(anchor="w", pady=(6, 0))
         self.file_label = ttk.Label(import_frame, text="No file loaded", foreground="#333",
                                      wraplength=280)
         self.file_label.pack(anchor="w", pady=(6, 0))
+        self._wrap_labels += [drop_hint_label, self.file_label]
 
         # --- slicing mode ---
         mode_frame = ttk.LabelFrame(controls_outer, text="2. Slicing Method", padding=10)
@@ -400,29 +477,34 @@ class SpriteSlicerApp:
         self._labeled_entry(self.auto_inputs, "Gap Tolerance:", self.detect_gap_var, 0, 2)
         self._labeled_entry(self.auto_inputs, "Min Size (px):", self.detect_minsize_var, 1, 0, pady=(6, 0))
         self._labeled_entry(self.auto_inputs, "Bg Color (hex):", self.detect_bgcolor_var, 1, 2, pady=(6, 0), entry_width=8)
-        ttk.Label(
+        bgcolor_hint = ttk.Label(
             self.auto_inputs,
             text="Bg Color is only used for images without transparency;\n"
                  "leave blank to auto-sample from the top-left pixel.",
             foreground="#666", justify="left", wraplength=280,
-        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        )
+        bgcolor_hint.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self.detect_button = ttk.Button(self.auto_inputs, text="Detect Sprites", command=self.run_detect)
         self.detect_button.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
-        ttk.Label(self.auto_inputs, textvariable=self.detect_status_var, foreground="#666",
-                  wraplength=280, justify="left").grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        detect_status_label = ttk.Label(self.auto_inputs, textvariable=self.detect_status_var,
+                                         foreground="#666", wraplength=280, justify="left")
+        detect_status_label.grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
         # json import inputs
         self.json_inputs = ttk.Frame(mode_frame)
         ttk.Button(self.json_inputs, text="Load JSON...", command=self.browse_json).pack(fill="x")
-        ttk.Label(self.json_inputs, textvariable=self.json_path_var, foreground="#666",
-                  wraplength=280, justify="left").pack(anchor="w", pady=(6, 0))
-        ttk.Label(
+        json_path_label = ttk.Label(self.json_inputs, textvariable=self.json_path_var,
+                                     foreground="#666", wraplength=280, justify="left")
+        json_path_label.pack(anchor="w", pady=(6, 0))
+        json_format_hint = ttk.Label(
             self.json_inputs,
             text="Supports a simple {\"sprites\":[{\"name\",\"x\",\"y\",\"width\",\"height\"}]} "
                  "list, or a TexturePacker-style {\"frames\": ...} atlas. Named entries keep "
                  "their JSON name as the output filename.",
             foreground="#666", justify="left", wraplength=280,
-        ).pack(anchor="w", pady=(6, 0))
+        )
+        json_format_hint.pack(anchor="w", pady=(6, 0))
+        self._wrap_labels += [bgcolor_hint, detect_status_label, json_path_label, json_format_hint]
 
         # --- margins / spacing / offset (grid & fixed modes only; the
         # section stays in place and its inputs are disabled rather than
@@ -439,9 +521,43 @@ class SpriteSlicerApp:
             self.margin_frame,
             text="Start = top-left offset before the first sprite.\n"
                  "Spacing = gap between adjacent sprites.",
-            foreground="#666", justify="left"
+            foreground="#666", justify="left", wraplength=280,
         )
         self.margin_hint.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+
+        # Touch-friendly D-pad for nudging the grid's start offset without
+        # having to type into the Start X/Y fields -- and the sheet itself
+        # can also just be dragged (mouse or touch) to reposition it; see
+        # the canvas bindings in _build_ui's preview section below.
+        nudge_row = ttk.Frame(self.margin_frame)
+        nudge_row.grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Label(nudge_row, text="Nudge grid:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        dpad = ttk.Frame(nudge_row)
+        dpad.grid(row=0, column=1)
+
+        def dpad_button(dx, dy, text):
+            btn = tk.Button(dpad, text=text, width=3, height=1, font=("TkDefaultFont", 12, "bold"),
+                             command=lambda: self._nudge_offset(dx, dy))
+            self.margin_entries.append(btn)  # disabled together with the other offset controls
+            return btn
+
+        dpad_button(0, -1, "▲").grid(row=0, column=1, padx=2, pady=2)
+        dpad_button(-1, 0, "◄").grid(row=1, column=0, padx=2, pady=2)
+        dpad_button(1, 0, "►").grid(row=1, column=2, padx=2, pady=2)
+        dpad_button(0, 1, "▼").grid(row=2, column=1, padx=2, pady=2)
+
+        ttk.Label(nudge_row, text="Step (px):").grid(row=0, column=2, sticky="w", padx=(14, 4))
+        step_entry = ttk.Entry(nudge_row, textvariable=self.nudge_step_var, width=5)
+        step_entry.grid(row=0, column=3, sticky="w")
+        self.margin_entries.append(step_entry)
+        drag_hint = ttk.Label(
+            self.margin_frame,
+            text="Tip: you can also tap/click-drag directly on the sheet "
+                 "preview to move the grid.",
+            foreground="#666", justify="left", wraplength=280,
+        )
+        drag_hint.grid(row=4, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        self._wrap_labels += [self.margin_hint, drag_hint]
 
         # --- naming ---
         naming_frame = ttk.LabelFrame(controls_outer, text="4. Naming", padding=10)
@@ -461,6 +577,7 @@ class SpriteSlicerApp:
         ttk.Checkbutton(naming_frame, text="Skip fully transparent/blank tiles",
                          variable=self.skip_blank_var, command=self._update_preview).grid(
             row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        self._wrap_labels.append(self.naming_hint)
 
         # --- output ---
         output_frame = ttk.LabelFrame(controls_outer, text="5. Export", padding=10)
@@ -476,6 +593,7 @@ class SpriteSlicerApp:
         self.output_label = ttk.Label(output_frame, text="Default: alongside source image",
                                        foreground="#666", wraplength=280)
         self.output_label.pack(anchor="w", pady=(6, 0))
+        self._wrap_labels.append(self.output_label)
         ttk.Checkbutton(output_frame, text="Also create a .zip archive",
                          variable=self.make_zip_var).pack(anchor="w", pady=(8, 0))
 
@@ -485,15 +603,13 @@ class SpriteSlicerApp:
 
         self._on_mode_change()
 
-        # -------- right: preview panel --------
-        preview_outer = ttk.Frame(root, padding=(0, 10, 10, 10))
-        preview_outer.grid(row=0, column=1, sticky="nsew")
-        preview_outer.rowconfigure(0, weight=1)
-        preview_outer.columnconfigure(0, weight=1)
+        # -------- preview panel (right when wide, below when narrow) --------
+        self.preview_outer = ttk.Frame(self.body, padding=(0, 10, 10, 10))
+        self.preview_outer.rowconfigure(0, weight=1)
+        self.preview_outer.columnconfigure(0, weight=1)
 
-        canvas_frame = ttk.Frame(preview_outer, relief="sunken", borderwidth=1)
+        canvas_frame = ttk.Frame(self.preview_outer, relief="sunken", borderwidth=1)
         canvas_frame.grid(row=0, column=0, sticky="nsew")
-        preview_outer.rowconfigure(0, weight=1)
 
         self.canvas = tk.Canvas(canvas_frame, bg="#2b2b2b", width=CANVAS_W, height=CANVAS_H,
                                  highlightthickness=0)
@@ -505,23 +621,108 @@ class SpriteSlicerApp:
         )
         self.canvas.bind("<Configure>", lambda e: self._update_preview())
 
+        # Drag (mouse or touch, wherever the platform maps touch to mouse
+        # events -- true of touchscreens under Tk on Windows/macOS/most
+        # Linux desktops) directly on the sheet to reposition the grid in
+        # "Rows x Columns" / "Fixed Sprite Size" mode, instead of only
+        # being able to type into the Start X/Y fields.
+        self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
+        self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+
         if DND_AVAILABLE:
             self.canvas.drop_target_register(DND_FILES)
             self.canvas.dnd_bind("<<Drop>>", self._on_drop)
 
-        info_bar = ttk.Frame(preview_outer)
+        info_bar = ttk.Frame(self.preview_outer)
         info_bar.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         ttk.Label(info_bar, textvariable=self.info_var, foreground="#333").pack(anchor="w")
 
-        status_bar = ttk.Frame(root, relief="sunken", borderwidth=1)
-        status_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
-        ttk.Label(status_bar, textvariable=self.status_var, padding=(6, 3)).pack(anchor="w")
+        # controls_container's own grid placement is handled by
+        # _apply_responsive_layout(), which also places preview_outer.
+        self.root.bind("<Configure>", self._on_root_configure)
 
     def _labeled_entry(self, parent, label, var, row, col, entry_width=8, pady=0):
         ttk.Label(parent, text=label).grid(row=row, column=col, sticky="w", padx=(0, 4), pady=pady)
         entry = ttk.Entry(parent, textvariable=var, width=entry_width)
         entry.grid(row=row, column=col + 1, sticky="w", padx=(0, 12), pady=pady)
         return entry
+
+    # ------------------------------------------------------------------
+    # Responsive layout: side-by-side on a wide window, stacked on a
+    # narrow/phone-sized one. Re-evaluated on every resize.
+    # ------------------------------------------------------------------
+    def _on_root_configure(self, event):
+        if event.widget is not self.root:
+            return
+        self._apply_responsive_layout()
+
+    def _apply_responsive_layout(self):
+        width = self.root.winfo_width()
+        # winfo_width() reports 1 before the window is first drawn; treat
+        # that as "wide" (the desktop-default layout) rather than narrow.
+        narrow = 1 < width < BREAKPOINT_WIDTH
+        mode = "narrow" if narrow else "wide"
+        if mode == self._layout_mode:
+            return
+        self._layout_mode = mode
+
+        self.body.columnconfigure(0, weight=1)
+        self.body.columnconfigure(1, weight=0 if narrow else 1)
+        self.body.rowconfigure(0, weight=0 if narrow else 1)
+        self.body.rowconfigure(1, weight=1 if narrow else 0)
+
+        if narrow:
+            # Controls on top in a height-capped, scrollable strip so the
+            # preview below always keeps enough room to be useful; sheet
+            # preview underneath, full width.
+            self.controls_canvas.configure(height=240)
+            self.controls_container.grid(row=0, column=0, columnspan=2, sticky="ew")
+            self.preview_outer.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        else:
+            # grid() only changes the options passed to it -- columnspan
+            # must be reset explicitly here or it would stick at 2 from a
+            # previous narrow layout and center the panel instead of
+            # pinning it to the left column.
+            self.controls_canvas.configure(height=400)
+            self.controls_container.grid(row=0, column=0, columnspan=1, sticky="ns")
+            self.preview_outer.grid(row=0, column=1, columnspan=1, sticky="nsew")
+
+    # ------------------------------------------------------------------
+    # Touch/tap grid repositioning: D-pad nudge buttons, and drag-on-sheet
+    # ------------------------------------------------------------------
+    def _nudge_offset(self, dx, dy):
+        if self.mode.get() not in ("grid", "fixed"):
+            return
+        step = max(1, _int_or(self.nudge_step_var.get(), 1))
+        new_x = max(0, _int_or(self.offset_x_var.get(), 0) + dx * step)
+        new_y = max(0, _int_or(self.offset_y_var.get(), 0) + dy * step)
+        self.offset_x_var.set(str(new_x))
+        self.offset_y_var.set(str(new_y))
+
+    def _on_canvas_press(self, event):
+        if self.image is None or self.mode.get() not in ("grid", "fixed"):
+            return
+        self._drag_start = (
+            event.x, event.y,
+            _int_or(self.offset_x_var.get(), 0), _int_or(self.offset_y_var.get(), 0),
+        )
+
+    def _on_canvas_drag(self, event):
+        if self._drag_start is None:
+            return
+        start_x, start_y, start_off_x, start_off_y = self._drag_start
+        scale = self.scale or 1.0
+        dx_img = (event.x - start_x) / scale
+        dy_img = (event.y - start_y) / scale
+        img_w, img_h = self.image.size
+        new_x = min(max(0, round(start_off_x + dx_img)), max(0, img_w - 1))
+        new_y = min(max(0, round(start_off_y + dy_img)), max(0, img_h - 1))
+        self.offset_x_var.set(str(new_x))
+        self.offset_y_var.set(str(new_y))
+
+    def _on_canvas_release(self, event):
+        self._drag_start = None
 
     def _bind_traces(self):
         watched = [
@@ -571,6 +772,13 @@ class SpriteSlicerApp:
             self.coords_naming_radio.configure(state="normal")
             hint = ""
         self.naming_hint.configure(text=hint)
+
+        # self.canvas doesn't exist yet on the very first call, made while
+        # _build_ui is still constructing the controls panel.
+        if hasattr(self, "canvas"):
+            self.canvas.configure(cursor="fleur" if grid_based else "arrow")
+            if not grid_based:
+                self._drag_start = None
 
         self._update_preview()
 
@@ -823,7 +1031,7 @@ class SpriteSlicerApp:
             return
 
         canvas = self.canvas
-        canvas.delete("sheet", "grid", "error")
+        canvas.delete("sheet", "grid", "error", "draghint")
 
         cw = max(canvas.winfo_width(), 100)
         ch = max(canvas.winfo_height(), 100)
@@ -867,6 +1075,12 @@ class SpriteSlicerApp:
             self.info_var.set("No sprites in current configuration.")
         else:
             self.info_var.set("")
+
+        if self.mode.get() in ("grid", "fixed"):
+            canvas.create_text(
+                cw // 2, ch - 14, text="Tap/drag the sheet to move the grid",
+                fill="#dddddd", font=("TkDefaultFont", 9), tags="draghint",
+            )
 
     # ------------------------------------------------------------------
     # Output directory handling

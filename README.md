@@ -30,6 +30,14 @@ browser, no server, no build step.
 - **Live preview** — an overlay is drawn directly on the sprite sheet so you
   can verify slice boundaries before exporting anything, whether from a
   uniform grid, detected content, or an imported mapping.
+- **Touch-friendly grid positioning** — in *Rows x Columns* / *Fixed Sprite
+  Size* mode, tap-and-drag (or click-and-drag) directly on the sheet preview
+  to move the grid, or use the on-screen ▲▼◄► nudge buttons next to the
+  offset fields. Both work alongside typing exact values into Start X/Y.
+- **Responsive window** — the window can be resized down to phone/tablet
+  proportions: below ~820px wide, the controls panel stacks above the
+  preview (instead of a cramped sidebar) and scrolls independently so
+  nothing is pushed off-screen.
 - **Automatic naming** — sequential (`sprite_001.png`, `sprite_002.png`, ...)
   or grid-coordinate based (`sprite_r0_c1.png`), with a custom prefix. A
   JSON entry's own `"name"` always takes priority when present.
@@ -70,6 +78,9 @@ python sprite_slicer.py
    - *Auto-Detect* — adjust threshold / gap tolerance / min size if needed,
      then click **Detect Sprites** (this scans the image, so it runs on
      demand rather than on every keystroke).
+   - For *Rows x Columns* / *Fixed Sprite Size*, you can also drag directly
+     on the sheet preview (mouse or touch) to reposition the grid, or use
+     the ▲▼◄► nudge buttons instead of typing into Start X/Y.
    - *Import Coordinates (JSON)* — click **Load JSON...** and pick a
      metadata file (see below for the supported formats).
 3. **Check the preview** — cyan boxes overlay the sheet so you can confirm

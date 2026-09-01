@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sprite Sheet Splitter</title>
+  <meta name="description" content="Slice a sprite sheet into individual sprite images. Use it in your browser, or download the desktop app." />
+  <meta name="theme-color" content="#161616" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23161616'/%3E%3Crect x='14' y='14' width='30' height='30' fill='%2300e5ff'/%3E%3Crect x='56' y='14' width='30' height='30' fill='%23ff6b6b'/%3E%3Crect x='14' y='56' width='30' height='30' fill='%23ffd166'/%3E%3Crect x='56' y='56' width='30' height='30' fill='%2306d6a0'/%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --bg: #161616; --panel: #1f1f1f; --border: #3a3a3a;
+      --text: #eaeaea; --muted: #9a9a9a; --accent: #00b8d4; --accent-text: #04222a;
+      color-scheme: dark;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --bg: #f4f4f5; --panel: #ffffff; --border: #d9d9df;
+        --text: #1a1a1a; --muted: #666670; --accent: #007b8f; --accent-text: #ffffff;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+      padding: 40px 16px;
+    }
+    .wrap { width: 100%; max-width: 720px; }
+    .logo { display: flex; justify-content: center; margin-bottom: 18px; }
+    .logo svg { width: 64px; height: 64px; border-radius: 14px; }
+    h1 { text-align: center; margin: 0 0 8px; font-size: 1.8rem; }
+    .tagline { text-align: center; color: var(--muted); margin: 0 0 32px; line-height: 1.5; }
+    .cards { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    @media (min-width: 640px) { .cards { grid-template-columns: 1fr 1fr; } }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+      padding: 24px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .card h2 { margin: 0; font-size: 1.15rem; }
+    .card p { margin: 0; color: var(--muted); font-size: 0.92rem; line-height: 1.5; flex: 1; }
+    .btn {
+      display: inline-block; text-align: center; text-decoration: none;
+      background: var(--accent); color: var(--accent-text); font-weight: 600;
+      border-radius: 8px; padding: 12px 16px; margin-top: 6px;
+    }
+    .btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .badge {
+      align-self: flex-start; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+      color: var(--accent); background: rgba(0, 184, 212, 0.12); padding: 3px 8px; border-radius: 999px;
+    }
+    footer { margin-top: 40px; color: var(--muted); font-size: 0.8rem; text-align: center; }
+    footer a { color: inherit; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <rect width="100" height="100" rx="18" fill="#161616"/>
+        <rect x="14" y="14" width="30" height="30" fill="#00e5ff"/>
+        <rect x="56" y="14" width="30" height="30" fill="#ff6b6b"/>
+        <rect x="14" y="56" width="30" height="30" fill="#ffd166"/>
+        <rect x="56" y="56" width="30" height="30" fill="#06d6a0"/>
+      </svg>
+    </div>
+    <h1>Sprite Sheet Splitter</h1>
+    <p class="tagline">Slice a sprite sheet into individual sprite images. Pick the version that fits how you work.</p>
+
+    <div class="cards">
+      <div class="card">
+        <span class="badge">Works on mobile</span>
+        <h2>Web App</h2>
+        <p>Runs entirely in your browser — phone, tablet, or desktop. No install, nothing uploaded anywhere. Export as a .zip in one tap.</p>
+        <a class="btn" href="app/">Open Web App</a>
+      </div>
+      <div class="card">
+        <span class="badge">Desktop</span>
+        <h2>Desktop App</h2>
+        <p>A native Python + Tkinter app for macOS, Windows, and Linux. Same features, plus optional drag-and-drop and direct folder export.</p>
+        <a class="btn secondary" href="desktop/">View &amp; Download</a>
+      </div>
+    </div>
+
+    <footer>
+      Source on <a href="https://github.com/chearst444/Sprite_slicer">GitHub</a>
+    </footer>
+  </div>
+</body>
+</html>

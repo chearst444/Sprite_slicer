@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sprite Sheet Splitter — Desktop</title>
+  <meta name="description" content="Download the Sprite Sheet Splitter desktop app (Python + Tkinter)." />
+  <meta name="theme-color" content="#161616" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%23161616'/%3E%3Crect x='14' y='14' width='30' height='30' fill='%2300e5ff'/%3E%3Crect x='56' y='14' width='30' height='30' fill='%23ff6b6b'/%3E%3Crect x='14' y='56' width='30' height='30' fill='%23ffd166'/%3E%3Crect x='56' y='56' width='30' height='30' fill='%2306d6a0'/%3E%3C/svg%3E" />
+  <style>
+    :root {
+      --bg: #161616; --panel: #1f1f1f; --border: #3a3a3a;
+      --text: #eaeaea; --muted: #9a9a9a; --accent: #00b8d4; --accent-text: #04222a;
+      color-scheme: dark;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --bg: #f4f4f5; --panel: #ffffff; --border: #d9d9df;
+        --text: #1a1a1a; --muted: #666670; --accent: #007b8f; --accent-text: #ffffff;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; justify-content: center; padding: 40px 16px;
+    }
+    .wrap { width: 100%; max-width: 640px; }
+    a.back { color: var(--muted); text-decoration: none; font-size: 0.85rem; }
+    h1 { margin: 18px 0 6px; font-size: 1.6rem; }
+    .muted { color: var(--muted); line-height: 1.6; }
+    .btn {
+      display: inline-block; text-decoration: none; background: var(--accent); color: var(--accent-text);
+      font-weight: 600; border-radius: 8px; padding: 14px 20px; margin: 18px 0;
+    }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 20px; margin-top: 20px;
+    }
+    .panel h2 { margin-top: 0; font-size: 1rem; }
+    ul { padding-left: 20px; line-height: 1.7; color: var(--text); }
+    code {
+      background: rgba(127,127,127,0.15); padding: 2px 6px; border-radius: 4px;
+      font-size: 0.9em;
+    }
+    pre {
+      background: rgba(127,127,127,0.12); border-radius: 8px; padding: 14px;
+      overflow-x: auto; font-size: 0.85rem; line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" href="../">&larr; Back</a>
+    <h1>Sprite Sheet Splitter — Desktop</h1>
+    <p class="muted">
+      A lightweight, standalone desktop utility built with Python, Tkinter, and Pillow.
+      No browser, no server, no build step.
+    </p>
+
+    <a class="btn" href="sprite-sheet-splitter-desktop.zip" download>Download (.zip)</a>
+
+    <div class="panel">
+      <h2>Requirements</h2>
+      <ul>
+        <li>Python 3</li>
+        <li><code>Pillow</code> (required)</li>
+        <li><code>tkinterdnd2</code> (optional — enables drag &amp; drop)</li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h2>Setup &amp; run</h2>
+      <pre>unzip sprite-sheet-splitter-desktop.zip
+cd sprite-sheet-splitter-desktop
+pip install -r requirements.txt
+python sprite_slicer.py</pre>
+    </div>
+
+    <div class="panel">
+      <h2>Features</h2>
+      <ul>
+        <li>Import via file browser or drag-and-drop</li>
+        <li>Four slicing methods: Rows × Columns, Fixed Sprite Size, Auto-Detect
+          (content-based bounding boxes for varying/irregular sprite sizes), and
+          JSON coordinate import (custom or TexturePacker-style atlases)</li>
+        <li>Live preview overlay on the sprite sheet</li>
+        <li>Sequential or row/col-based automatic naming with a custom prefix;
+          JSON entries can supply their own name</li>
+        <li>Auto-created, collision-safe output folder, with optional .zip export</li>
+        <li>Option to skip fully transparent tiles</li>
+      </ul>
+    </div>
+
+    <p class="muted" style="margin-top:24px;">
+      Full source and README:
+      <a href="https://github.com/chearst444/Sprite_slicer/tree/claude/sprite-sheet-splitter-gqhx2f">view on GitHub</a>
+    </p>
+  </div>
+</body>
+</html>

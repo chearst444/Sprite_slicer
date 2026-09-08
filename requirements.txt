@@ -1,0 +1,4 @@
+Pillow>=10.0.0
+# Optional: enables drag-and-drop of image files onto the preview panel.
+# The app runs fine without it (use the "Browse..." button instead).
+tkinterdnd2>=0.3.0
